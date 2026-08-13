@@ -1,0 +1,17 @@
+
+Adding new model to evaluation on cuda
+
+==============================
+Model: Pretrained MobileNetV2
+==============================
+Training Time: 1694.75s
+Best Validation Accuracy: 0.9217
+
+--- Test Set Results ---
+Overall Accuracy (Independent): 0.8425
+Normal Accuracy (Object Dependent): 0.7600
+Anomaly Accuracy (Object Dependent): 0.9251
+
+Confusion Matrix:
+[[649 205]
+ [ 64 790]]

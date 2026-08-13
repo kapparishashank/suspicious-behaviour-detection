@@ -1,0 +1,39 @@
+# Datasets & Processed Data
+archive/
+processed_data/
+processed_data_cropped/
+yolo_data/
+
+# Model Binary Weights
+*.pth
+*.pt
+*.onnx
+*.engine
+*.weights
+
+# Training Output, Plots & Logs
+runs/
+*.log
+*.png
+
+# Temporary & Agent Scratch
+scratch/
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
