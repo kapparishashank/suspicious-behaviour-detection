@@ -48,18 +48,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONFIGURATION ---
-YOLO_MODEL_PATH = r'c:\Users\sadam\OneDrive\Documents\Field project\runs\detect\yolo_runs\human_detection2\weights\best.pt'
-CLASSIFIER_PATH = r'c:\Users\sadam\OneDrive\Documents\Field project\best_pretrained_mobilenetv2.pth'
+# --- CONFIGURATION (Using relative paths for GitHub) ---
+YOLO_MODEL_PATH = './models/yolo_runs/human_detection/weights/best.pt'
+CLASSIFIER_PATH = './models/best_mobilenetv2.pth'
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @st.cache_resource
 def load_models():
+    # Check if model files exist before loading
+    if not os.path.exists(YOLO_MODEL_PATH) or not os.path.exists(CLASSIFIER_PATH):
+        st.error("❌ Model weights not found! Please ensure models are in the `./models/` directory.")
+        return None, None
+        
     try:
         det_model = YOLO(YOLO_MODEL_PATH)
-        class_model = models.mobilenet_v2(pretrained=False)
+        # Fixed PyTorch deprecation warning (pretrained=False -> weights=None)
+        class_model = models.mobilenet_v2(weights=None)
         class_model.classifier[1] = nn.Linear(class_model.last_channel, 2)
-        class_model.load_state_dict(torch.load(CLASSIFIER_PATH))
+        class_model.load_state_dict(torch.load(CLASSIFIER_PATH, map_location=DEVICE))
         class_model = class_model.to(DEVICE).eval()
         return det_model, class_model
     except Exception as e:
@@ -98,10 +104,18 @@ def main():
     uploaded_file = st.file_uploader("Upload Video for Behavior Verification", type=["mp4", "avi", "mov", "mkv"])
 
     if uploaded_file:
-        tfile = tempfile.NamedTemporaryFile(delete=False)
+        # Create a temporary file to save the uploaded video
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}")
         tfile.write(uploaded_file.read())
+        temp_file_path = tfile.name
         
-        cap = cv2.VideoCapture(tfile.name)
+        cap = cv2.VideoCapture(temp_file_path)
+        
+        if not cap.isOpened():
+            st.error("❌ Could not open video file. It might be corrupted.")
+            os.remove(temp_file_path) # Clean up
+            return
+
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
         # Dashboard Layout
@@ -116,92 +130,27 @@ def main():
         progress_bar = st.progress(0)
         
         # Stats accumulation
-        frames_processed = 0
-        all_detections = []
+        raw_frame_count = 0
         suspicion_trend = []
         
         start_time = time.time()
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret: break
-            
-            frames_processed += 1
-            if frames_processed % frame_skip != 0:
-                continue
+        try:
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret: break
+                
+                raw_frame_count += 1
+                
+                # Update progress bar even for skipped frames
+                progress_bar.progress(min(raw_frame_count / total_frames, 1.0))
 
-            # Update progress
-            progress_bar.progress(min(frames_processed / total_frames, 1.0))
-            
-            # Processing Timer
-            proc_start = time.time()
-            
-            # Inference
-            results = det_model(frame, device=DEVICE, verbose=False, conf=0.5)
-            
-            current_people_count = 0
-            is_abnormal = False
-            max_suspicion = 0.0
-            
-            for result in results:
-                for box in result.boxes:
-                    current_people_count += 1
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    crop = frame[int(y1):int(y2), int(x1):int(x2)]
-                    
-                    if crop.size == 0: continue
-                    
-                    # Classifier Preprocessing
-                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                    input_tensor = preprocess(Image.fromarray(crop_rgb)).unsqueeze(0).to(DEVICE)
-                    
-                    with torch.no_grad():
-                        probs = torch.softmax(class_model(input_tensor), dim=1)[0]
-                        abnormal_prob = probs[1].item()
-                        max_suspicion = max(max_suspicion, abnormal_prob)
-                        
-                        if abnormal_prob > conf_threshold:
-                            is_abnormal = True
-                            label, color = "⚠️ SUSPICIOUS", (0, 0, 255)
-                        else:
-                            label, color = "Normal", (0, 255, 0)
-                    
-                    # Visualization
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                    cv2.putText(frame, f"{label} {abnormal_prob:.1%}", (int(x1), int(y1)-5), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                # Skip frames to speed up processing
+                if raw_frame_count % frame_skip != 0:
+                    continue
 
-            # Global Frame Status
-            if is_abnormal:
-                cv2.putText(frame, "ANOMALY DETECTED", (20, 40), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                status_metric.metric("Security Status", "🚨 ALERT", delta="-Suspicious Activity")
-            else:
-                status_metric.metric("Security Status", "✅ SECURE", delta="Normal")
-
-            # Metrics Calculation
-            proc_time = time.time() - proc_start
-            current_fps = 1.0 / proc_time if proc_time > 0 else 0
-            
-            fps_metric.metric("Processing Speed", f"{current_fps:.1f} FPS")
-            person_metric.metric("Active Detection", f"{current_people_count} People")
-            
-            # Update Display
-            video_placeholder.image(frame, channels="BGR", use_container_width=True)
-            
-            # Track trends
-            suspicion_trend.append(max_suspicion)
-
-        cap.release()
-        st.success(f"Verification complete! Total time: {time.time() - start_time:.1f}s")
-        
-        # Post-Analysis Stats
-        st.markdown("---")
-        st.markdown("### Efficiency & Behavior Trends")
-        chart_data = pd.DataFrame({"Max Suspicion Level": suspicion_trend})
-        st.line_chart(chart_data)
-        
-        st.info("The trend line shows the highest suspicion score recorded in each frame. Spikes above your threshold represent anomaly detections.")
-
-if __name__ == "__main__":
-    main()
+                # Processing Timer
+                proc_start = time.time()
+                
+                # Inference
+                results = det_model(frame, device=DEVICE, verbose=False, 
